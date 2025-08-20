@@ -1,64 +1,45 @@
 import streamlit as st
-import cv2
+import av
 import numpy as np
 from tensorflow.keras.models import load_model
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.preprocessing.image import img_to_array
-from PIL import Image
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
 # Cargar modelo
-model = load_model("fruits_model.h5")  # asegúrate de subirlo también a Streamlit
+model = load_model("fruits_model.h5")
 CLASS_NAMES = ["banana", "fresa", "kiwi", "manzana", "naranja", "pina", "sandia", "uva"]
 
-# Colores para cada fruta (HEX para Streamlit)
-fruit_colors = {
-    "banana": "#FFFF00",
-    "fresa": "#FF0000",
-    "kiwi": "#008000",
-    "manzana": "#FF0000",
-    "naranja": "#FFA500",
-    "pina": "#FFFF00",
-    "sandia": "#8B0000",
-    "uva": "#800080"
-}
-
-def predict_image(image: Image.Image):
-    """Preprocesar y predecir la fruta en una imagen"""
-    image = image.resize((224, 224))
+def predict_frame(frame):
+    image = frame.resize((224, 224))
     img_array = img_to_array(image)
     img_array = preprocess_input(img_array)
     img_array = np.expand_dims(img_array, axis=0)
 
     preds = model.predict(img_array)[0]
     idx = np.argmax(preds)
-    return CLASS_NAMES[idx], float(preds[idx]), dict(zip(CLASS_NAMES, preds.tolist()))
+    return CLASS_NAMES[idx], float(preds[idx])
 
-# Interfaz Streamlit
-st.title("🍍 Clasificador de Frutas con IA")
-st.write("Sube una imagen o toma una foto para reconocer la fruta.")
+# Configuración para WebRTC
+RTC_CONFIGURATION = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 
-# Opción 1: Subir imagen
-uploaded_file = st.file_uploader("📤 Subir imagen", type=["jpg", "jpeg", "png"])
+class VideoProcessor(VideoProcessorBase):
+    def recv(self, frame):
+        img = frame.to_image()
+        label, conf = predict_frame(img)
 
-# Opción 2: Usar cámara (solo funciona en navegador, no en todos los dispositivos)
-camera_input = st.camera_input("📷 Tomar foto")
+        # Convertimos el frame a OpenCV para añadir texto
+        img_cv = np.array(img)
+        cv2 = __import__("cv2")  # importar dinámicamente
+        cv2.putText(img_cv, f"{label} ({conf*100:.1f}%)", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-image = None
-if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-elif camera_input is not None:
-    image = Image.open(camera_input)
+        return av.VideoFrame.from_ndarray(img_cv, format="bgr24")
 
-if image is not None:
-    st.image(image, caption="📸 Imagen seleccionada", use_column_width=True)
-
-    # Hacer predicción
-    class_name, confidence, probabilities = predict_image(image)
-
-    st.subheader(f"✅ Predicción: {class_name.upper()} ({confidence*100:.1f}%)")
-
-    # Mostrar barras de probabilidad
-    st.write("### 🔎 Probabilidades por fruta")
-    for fruit, prob in probabilities.items():
-        st.progress(min(1.0, prob))  # progress espera [0,1]
-        st.text(f"{fruit}: {prob*100:.1f}%")
+st.title("🍌 Clasificador de Frutas en Vivo")
+webrtc_streamer(
+    key="example",
+    video_processor_factory=VideoProcessor,
+    rtc_configuration=RTC_CONFIGURATION,
+    media_stream_constraints={"video": True, "audio": False},
+)
