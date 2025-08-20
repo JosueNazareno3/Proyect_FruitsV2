@@ -1,45 +1,36 @@
-import streamlit as st
-import av
 import numpy as np
-from tensorflow.keras.models import load_model
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-from tensorflow.keras.preprocessing.image import img_to_array
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import cv2
+import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+import tflite_runtime.interpreter as tflite
+from PIL import Image
 
-# Cargar modelo
-model = load_model("fruits_model.h5")
-CLASS_NAMES = ["banana", "fresa", "kiwi", "manzana", "naranja", "pina", "sandia", "uva"]
+# Cargar modelo TFLite
+interpreter = tflite.Interpreter(model_path="fruits_model.tflite")
+interpreter.allocate_tensors()
 
-def predict_frame(frame):
-    image = frame.resize((224, 224))
-    img_array = img_to_array(image)
-    img_array = preprocess_input(img_array)
-    img_array = np.expand_dims(img_array, axis=0)
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
-    preds = model.predict(img_array)[0]
-    idx = np.argmax(preds)
-    return CLASS_NAMES[idx], float(preds[idx])
+# Etiquetas de tus frutas
+CLASSES = ["Banana", "Manzana", "Naranja", "Uva", "Piña", "Mango", "Fresa", "Cereza"]
 
-# Configuración para WebRTC
-RTC_CONFIGURATION = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+def predict(image):
+    img = cv2.resize(image, (100, 100))  # ajusta según tu modelo
+    img = np.expand_dims(img, axis=0).astype(np.float32) / 255.0
+    
+    interpreter.set_tensor(input_details[0]['index'], img)
+    interpreter.invoke()
+    preds = interpreter.get_tensor(output_details[0]['index'])
+    return CLASSES[np.argmax(preds)], np.max(preds)
 
-class VideoProcessor(VideoProcessorBase):
-    def recv(self, frame):
-        img = frame.to_image()
-        label, conf = predict_frame(img)
-
-        # Convertimos el frame a OpenCV para añadir texto
-        img_cv = np.array(img)
-        cv2 = __import__("cv2")  # importar dinámicamente
-        cv2.putText(img_cv, f"{label} ({conf*100:.1f}%)", (10, 30),
+class VideoTransformer(VideoTransformerBase):
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        label, conf = predict(img)
+        cv2.putText(img, f"{label} ({conf:.2f})", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        return img
 
-        return av.VideoFrame.from_ndarray(img_cv, format="bgr24")
-
-st.title("🍌 Clasificador de Frutas en Vivo")
-webrtc_streamer(
-    key="example",
-    video_processor_factory=VideoProcessor,
-    rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={"video": True, "audio": False},
-)
+st.title("🍌🍎 Clasificador de Frutas en Vivo")
+webrtc_streamer(key="fruits", video_transformer_factory=VideoTransformer)
